@@ -2,10 +2,11 @@ package prometheusmetrics
 
 import (
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/rcrowley/go-metrics"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rcrowley/go-metrics"
 )
 
 // PrometheusConfig provides a container with config parameters for the
@@ -81,7 +82,7 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 			lastSample := metric.Snapshot().Rate1()
 			c.gaugeFromNameAndValue(name, float64(lastSample))
 		case metrics.Timer:
-			lastSample := metric.Snapshot().Rate1()
+			lastSample := metric.Snapshot().Percentile(50.0)
 			c.gaugeFromNameAndValue(name, float64(lastSample))
 		}
 	})
