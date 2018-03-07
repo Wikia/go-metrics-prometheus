@@ -10,7 +10,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 )
 
-type MetricConverter func(metric interface{}) (float64, error)
+type MetricConverter func(name string, metric interface{}) (float64, error)
 
 // PrometheusConfig provides a container with config parameters for the
 // Prometheus Exporter
@@ -25,7 +25,7 @@ type PrometheusConfig struct {
 	converter     MetricConverter
 }
 
-func DefaultMetricConverter(i interface{}) (float64, error) {
+func DefaultMetricConverter(name string, i interface{}) (float64, error) {
 	switch metric := i.(type) {
 	case metrics.Counter:
 		return float64(metric.Count()), nil
@@ -47,7 +47,7 @@ func DefaultMetricConverter(i interface{}) (float64, error) {
 		return float64(lastSample), nil
 	}
 
-	return 0.0, fmt.Errorf("unknown type to convert: %s", reflect.TypeOf(i))
+	return 0.0, fmt.Errorf("metric '%s' has unknown type: %s", name, reflect.TypeOf(i))
 }
 
 // NewPrometheusProvider returns a Provider that produces Prometheus metrics.
@@ -99,7 +99,7 @@ func (c *PrometheusConfig) UpdatePrometheusMetrics() {
 
 func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 	c.Registry.Each(func(name string, i interface{}) {
-		value, err := c.converter(i)
+		value, err := c.converter(name, i)
 		if err == nil {
 			c.gaugeFromNameAndValue(name, value)
 		}
