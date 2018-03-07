@@ -43,7 +43,7 @@ func DefaultMetricConverter(i interface{}) (float64, error) {
 		lastSample := metric.Snapshot().Rate1()
 		return float64(lastSample), nil
 	case metrics.Timer:
-		lastSample := metric.Snapshot().Percentile(50.0)
+		lastSample := metric.Snapshot().Rate1()
 		return float64(lastSample), nil
 	}
 
