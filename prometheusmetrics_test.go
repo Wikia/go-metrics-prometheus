@@ -2,10 +2,11 @@ package prometheusmetrics
 
 import (
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/rcrowley/go-metrics"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rcrowley/go-metrics"
 )
 
 func TestPrometheusRegistration(t *testing.T) {
@@ -73,6 +74,26 @@ func TestPrometheusCounterGetUpdated(t *testing.T) {
 	}
 }
 
+func TestPrometheusCounterGetUpdatedWithCustomConverter(t *testing.T) {
+	prometheusRegistry := prometheus.NewRegistry()
+	metricsRegistry := metrics.NewRegistry()
+	converter := func(i interface{}) (float64, error) { return 12345, nil }
+	pClient := NewPrometheusProvider(metricsRegistry, "test", "subsys", prometheusRegistry, 1*time.Second)
+	pClient.SetMetricConverter(converter)
+	cntr := metrics.NewCounter()
+	metricsRegistry.Register("counter", cntr)
+	cntr.Inc(2)
+	go pClient.UpdatePrometheusMetrics()
+	cntr.Inc(13)
+	time.Sleep(5 * time.Second)
+	metrics, _ := prometheusRegistry.Gather()
+	serialized := fmt.Sprint(metrics[0])
+	expected := fmt.Sprintf("name:\"test_subsys_counter\" help:\"counter\" type:GAUGE metric:<gauge:<value:%d > > ", 12345)
+	if serialized != expected {
+		t.Fatalf("Go-metrics value and prometheus metrics value do not match: ex: " + expected + " ser: " + serialized)
+	}
+}
+
 func TestPrometheusGaugeGetUpdated(t *testing.T) {
 	prometheusRegistry := prometheus.NewRegistry()
 	metricsRegistry := metrics.NewRegistry()
@@ -109,7 +130,7 @@ func TestPrometheusMeterGetUpdated(t *testing.T) {
 		t.Fatalf("prometheus was unable to register the metric")
 	}
 	serialized := fmt.Sprint(metrics[0])
-	expected := fmt.Sprintf("name:\"test_subsys_meter\" help:\"meter\" type:GAUGE metric:<gauge:<value:%.16f > > ", gm.Rate1())
+	expected := fmt.Sprintf("name:\"test_subsys_meter\" help:\"meter\" type:GAUGE metric:<gauge:<value:%g > > ", gm.Rate1())
 	if serialized != expected {
 		t.Fatalf("Go-metrics value and prometheus metrics value do not match")
 	}

@@ -2,12 +2,15 @@ package prometheusmetrics
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rcrowley/go-metrics"
 )
+
+type MetricConverter func(metric interface{}) (float64, error)
 
 // PrometheusConfig provides a container with config parameters for the
 // Prometheus Exporter
@@ -19,6 +22,32 @@ type PrometheusConfig struct {
 	promRegistry  prometheus.Registerer //Prometheus registry
 	FlushInterval time.Duration         //interval to update prom metrics
 	gauges        map[string]prometheus.Gauge
+	converter     MetricConverter
+}
+
+func DefaultMetricConverter(i interface{}) (float64, error) {
+	switch metric := i.(type) {
+	case metrics.Counter:
+		return float64(metric.Count()), nil
+	case metrics.Gauge:
+		return float64(metric.Value()), nil
+	case metrics.GaugeFloat64:
+		return float64(metric.Value()), nil
+	case metrics.Histogram:
+		samples := metric.Snapshot().Sample().Values()
+		if len(samples) > 0 {
+			lastSample := samples[len(samples)-1]
+			return float64(lastSample), nil
+		}
+	case metrics.Meter:
+		lastSample := metric.Snapshot().Rate1()
+		return float64(lastSample), nil
+	case metrics.Timer:
+		lastSample := metric.Snapshot().Percentile(50.0)
+		return float64(lastSample), nil
+	}
+
+	return 0.0, fmt.Errorf("unknown type to convert: %s", reflect.TypeOf(i))
 }
 
 // NewPrometheusProvider returns a Provider that produces Prometheus metrics.
@@ -31,7 +60,12 @@ func NewPrometheusProvider(r metrics.Registry, namespace string, subsystem strin
 		promRegistry:  promRegistry,
 		FlushInterval: FlushInterval,
 		gauges:        make(map[string]prometheus.Gauge),
+		converter:     DefaultMetricConverter,
 	}
+}
+
+func (c *PrometheusConfig) SetMetricConverter(converter MetricConverter) {
+	c.converter = converter
 }
 
 func (c *PrometheusConfig) flattenKey(key string) string {
@@ -65,25 +99,9 @@ func (c *PrometheusConfig) UpdatePrometheusMetrics() {
 
 func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 	c.Registry.Each(func(name string, i interface{}) {
-		switch metric := i.(type) {
-		case metrics.Counter:
-			c.gaugeFromNameAndValue(name, float64(metric.Count()))
-		case metrics.Gauge:
-			c.gaugeFromNameAndValue(name, float64(metric.Value()))
-		case metrics.GaugeFloat64:
-			c.gaugeFromNameAndValue(name, float64(metric.Value()))
-		case metrics.Histogram:
-			samples := metric.Snapshot().Sample().Values()
-			if len(samples) > 0 {
-				lastSample := samples[len(samples)-1]
-				c.gaugeFromNameAndValue(name, float64(lastSample))
-			}
-		case metrics.Meter:
-			lastSample := metric.Snapshot().Rate1()
-			c.gaugeFromNameAndValue(name, float64(lastSample))
-		case metrics.Timer:
-			lastSample := metric.Snapshot().Percentile(50.0)
-			c.gaugeFromNameAndValue(name, float64(lastSample))
+		value, err := c.converter(i)
+		if err == nil {
+			c.gaugeFromNameAndValue(name, value)
 		}
 	})
 	return nil
