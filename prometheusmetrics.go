@@ -11,18 +11,43 @@ import (
 )
 
 type MetricConverter func(name string, metric interface{}) (float64, error)
+type Normalizer func(name string) string
 
 // PrometheusConfig provides a container with config parameters for the
 // Prometheus Exporter
 
 type PrometheusConfig struct {
-	namespace     string
-	Registry      metrics.Registry // Registry to be exported
-	subsystem     string
+	Namespace     string
+	registry      metrics.Registry // Registry to be exported
+	Subsystem     string
 	promRegistry  prometheus.Registerer //Prometheus registry
 	FlushInterval time.Duration         //interval to update prom metrics
 	gauges        map[string]prometheus.Gauge
 	converter     MetricConverter
+	keyNormalizer Normalizer
+}
+
+type optSetter func(c *PrometheusConfig) error
+
+func Converter(converter MetricConverter) optSetter {
+	return func(c *PrometheusConfig) error {
+		c.converter = converter
+		return nil
+	}
+}
+
+func KeyNormalizer(normalizer Normalizer) optSetter {
+	return func(c *PrometheusConfig) error {
+		c.keyNormalizer = normalizer
+		return nil
+	}
+}
+
+func FlushRate(duration time.Duration) optSetter {
+	return func(c *PrometheusConfig) error {
+		c.FlushInterval = duration
+		return nil
+	}
 }
 
 func DefaultMetricConverter(name string, i interface{}) (float64, error) {
@@ -50,40 +75,48 @@ func DefaultMetricConverter(name string, i interface{}) (float64, error) {
 	return 0.0, fmt.Errorf("metric '%s' has unknown type: %s", name, reflect.TypeOf(i))
 }
 
-// NewPrometheusProvider returns a Provider that produces Prometheus metrics.
-// Namespace and subsystem are applied to all produced metrics.
-func NewPrometheusProvider(r metrics.Registry, namespace string, subsystem string, promRegistry prometheus.Registerer, FlushInterval time.Duration) *PrometheusConfig {
-	return &PrometheusConfig{
-		namespace:     namespace,
-		subsystem:     subsystem,
-		Registry:      r,
-		promRegistry:  promRegistry,
-		FlushInterval: FlushInterval,
-		gauges:        make(map[string]prometheus.Gauge),
-		converter:     DefaultMetricConverter,
-	}
-}
-
-func (c *PrometheusConfig) SetMetricConverter(converter MetricConverter) {
-	c.converter = converter
-}
-
-func (c *PrometheusConfig) flattenKey(key string) string {
+func DefaultKeyNormalizer(key string) string {
 	key = strings.Replace(key, " ", "_", -1)
 	key = strings.Replace(key, ".", "_", -1)
 	key = strings.Replace(key, "-", "_", -1)
 	key = strings.Replace(key, "=", "_", -1)
+
 	return key
 }
 
+func LowerCaseKeyNormalizer(key string) string { return strings.ToLower(DefaultKeyNormalizer(key)) }
+
+// NewPrometheusProvider returns a Provider that produces Prometheus metrics.
+// Namespace and Subsystem are applied to all produced metrics.
+func NewPrometheusProvider(r metrics.Registry, namespace string, subsystem string, promRegistry prometheus.Registerer, setters ...optSetter) (*PrometheusConfig, error) {
+	conf := &PrometheusConfig{
+		Namespace:     namespace,
+		Subsystem:     subsystem,
+		registry:      r,
+		promRegistry:  promRegistry,
+		FlushInterval: 15 * time.Second,
+		gauges:        make(map[string]prometheus.Gauge),
+		converter:     DefaultMetricConverter,
+		keyNormalizer: DefaultKeyNormalizer,
+	}
+
+	for _, s := range setters {
+		if err := s(conf); err != nil {
+			return nil, err
+		}
+	}
+
+	return conf, nil
+}
+
 func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
-	key := fmt.Sprintf("%s_%s_%s", c.namespace, c.subsystem, name)
+	key := fmt.Sprintf("%s_%s_%s", c.Namespace, c.Subsystem, name)
 	g, ok := c.gauges[key]
 	if !ok {
 		g = prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: c.flattenKey(c.namespace),
-			Subsystem: c.flattenKey(c.subsystem),
-			Name:      c.flattenKey(name),
+			Namespace: c.keyNormalizer(c.Namespace),
+			Subsystem: c.keyNormalizer(c.Subsystem),
+			Name:      c.keyNormalizer(name),
 			Help:      name,
 		})
 		c.promRegistry.MustRegister(g)
@@ -98,7 +131,7 @@ func (c *PrometheusConfig) UpdatePrometheusMetrics() {
 }
 
 func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
-	c.Registry.Each(func(name string, i interface{}) {
+	c.registry.Each(func(name string, i interface{}) {
 		value, err := c.converter(name, i)
 		if err == nil {
 			c.gaugeFromNameAndValue(name, value)
